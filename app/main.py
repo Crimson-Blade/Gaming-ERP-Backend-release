@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from .database import engine
 from . import models
-from .endpoints import registrations, systems, orders, menu, billing, session
+from .endpoints import registrations, systems, orders, menu, billing, session, analytics
 from dotenv import load_dotenv
 
 
@@ -31,3 +31,4 @@ app.include_router(orders.router)
 app.include_router(menu.router)
 app.include_router(billing.router)
 app.include_router(session.router)
+app.include_router(analytics.router)

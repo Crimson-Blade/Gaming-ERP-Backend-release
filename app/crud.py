@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 from . import models, schemas
-from datetime import datetime
+from datetime import datetime, date
 from pytz import timezone
-from sqlalchemy import func
+from sqlalchemy import func, extract
 import uuid
 
 # Registrations
@@ -148,3 +148,187 @@ def end_session(db: Session, user_id: uuid.UUID):
     db.commit()
     db.refresh(registration)
     return registration
+
+# Analytics
+
+# Function to get daily, weekly, or monthly registration stats within a date range
+def get_registration_stats(db: Session, period: str, start_date: date, end_date: date):
+    if period == "daily":
+        data = db.query(
+            func.date(models.Registration.date).label("day"),
+            func.count(models.Registration.user_id).label("registrations")
+        ).filter(
+            models.Registration.date >= start_date,
+            models.Registration.date <= end_date
+        ).group_by(func.date(models.Registration.date)).all()
+
+        labels = [str(row.day) for row in data]
+        values = [row.registrations for row in data]
+        return {"labels": labels, "values": values}
+
+    elif period == "weekly":
+        data = db.query(
+            func.date_trunc('week', models.Registration.date).label("week"),
+            func.count(models.Registration.user_id).label("registrations")
+        ).filter(
+            models.Registration.date >= start_date,
+            models.Registration.date <= end_date
+        ).group_by(func.date_trunc('week', models.Registration.date)).all()
+
+        labels = [str(row.week) for row in data]
+        values = [row.registrations for row in data]
+        return {"labels": labels, "values": values}
+
+    elif period == "monthly":
+        data = db.query(
+            extract('month', models.Registration.date).label("month"),
+            func.count(models.Registration.user_id).label("registrations")
+        ).filter(
+            models.Registration.date >= start_date,
+            models.Registration.date <= end_date
+        ).group_by(extract('month', models.Registration.date)).all()
+
+        month_names = {1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June", 7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"}
+        labels = [month_names.get(int(row.month), "Unknown") for row in data]
+        values = [row.registrations for row in data]
+        
+        return {"labels": labels, "values": values}
+       
+from datetime import datetime
+
+# Function to get active and inactive user count
+def get_active_inactive_users(db: Session):
+    today = datetime.utcnow().date()
+
+    active_users = db.query(func.count(models.Registration.user_id)).filter(
+        models.Registration.active == True,
+        func.date(models.Registration.date) == today
+    ).scalar()
+
+    inactive_users = db.query(func.count(models.Registration.user_id)).filter(
+        models.Registration.active == False,
+        func.date(models.Registration.date) == today
+    ).scalar()
+
+    return [
+        {"customer": "active", "visitors": active_users, "fill": "var(--color-active)"},
+        {"customer": "inactive", "visitors": inactive_users, "fill": "var(--color-inactive)"}
+    ]
+
+# Function to get income stats from systems and orders for a given period and date range
+def get_income_stats(db: Session, period: str, start_date: date, end_date: date):
+    # Calculate income from systems (services like lounge, consoles, etc.)
+    if period == "daily":
+        systems_income = db.query(
+            func.date(models.System.start_time).label("day"),
+            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None)
+        ).group_by(func.date(models.System.start_time)).all()
+
+        # Calculate income from orders
+        orders_income = db.query(
+            func.date(models.Order.user_id).label("day"),
+            func.sum(models.Order.price * models.Order.quantity).label("income")
+        ).filter(
+            models.Order.user_id.in_(
+                db.query(models.Registration.user_id).filter(
+                    models.Registration.date >= start_date,
+                    models.Registration.date <= end_date
+                )
+            )
+        ).group_by(func.date(models.Order.user_id)).all()
+
+        return merge_incomes_by_day(systems_income, orders_income)
+
+    elif period == "weekly":
+        systems_income = db.query(
+            func.date_trunc('week', models.System.start_time).label("week"),
+            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None)
+        ).group_by(func.date_trunc('week', models.System.start_time)).all()
+
+        orders_income = db.query(
+            func.date_trunc('week', models.Order.user_id).label("week"),
+            func.sum(models.Order.price * models.Order.quantity).label("income")
+        ).filter(
+            models.Order.user_id.in_(
+                db.query(models.Registration.user_id).filter(
+                    models.Registration.date >= start_date,
+                    models.Registration.date <= end_date
+                )
+            )
+        ).group_by(func.date_trunc('week', models.Order.user_id)).all()
+
+        return merge_incomes_by_week(systems_income, orders_income)
+
+    elif period == "monthly":
+        systems_income = db.query(
+            extract('month', models.System.start_time).label("month"),
+            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None)
+        ).group_by(extract('month', models.System.start_time)).all()
+
+        orders_income = db.query(
+            extract('month', models.Order.user_id).label("month"),
+            func.sum(models.Order.price * models.Order.quantity).label("income")
+        ).filter(
+            models.Order.user_id.in_(
+                db.query(models.Registration.user_id).filter(
+                    models.Registration.date >= start_date,
+                    models.Registration.date <= end_date
+                )
+            )
+        ).group_by(extract('month', models.Order.user_id)).all()
+
+        return merge_incomes_by_month(systems_income, orders_income)
+
+def merge_incomes_by_day(systems_income, orders_income):
+    merged_income = {}
+    for row in systems_income:
+        merged_income[row.day] = {"date": row.day, "income": row.income}
+    
+    for row in orders_income:
+        if row.day in merged_income:
+            merged_income[row.day]["income"] += row.income
+        else:
+            merged_income[row.day] = {"date": row.day, "income": row.income}
+
+    return list(merged_income.values())
+
+def merge_incomes_by_week(systems_income, orders_income):
+    merged_income = {}
+    for row in systems_income:
+        merged_income[row.week] = {"week": row.week, "income": row.income}
+    
+    for row in orders_income:
+        if row.week in merged_income:
+            merged_income[row.week]["income"] += row.income
+        else:
+            merged_income[row.week] = {"week": row.week, "income": row.income}
+
+    return list(merged_income.values())
+
+def merge_incomes_by_month(systems_income, orders_income):
+    merged_income = {}
+    month_names = {1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June", 7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"}
+    for row in systems_income:
+        month_name = month_names.get(int(row.month), "Unknown")
+        merged_income[month_name] = {"month": month_name, "income": row.income}
+    
+    for row in orders_income:
+        month_name = month_names.get(int(row.month), "Unknown")
+        if month_name in merged_income:
+            merged_income[month_name]["income"] += row.income
+        else:
+            merged_income[month_name] = {"month": month_name, "income": row.income}
+
+    return list(merged_income.values())
