@@ -64,3 +64,18 @@ class Order(OrderBase):
 
     class Config:
         orm_mode = True
+
+# Base schema for charts that have both labels and values
+class ChartResponse(BaseModel):
+    labels: List[str]
+    values: List[float]
+
+# Specific schema for Active/Inactive users since it only has values
+class ActiveInactiveUsersResponse(BaseModel):
+    values: List[int]
+
+# Aliases for different use cases (reusing the same structure for consistency)
+AverageSessionDurationResponse = ChartResponse
+RegistrationStatsResponse = ChartResponse
+IncomeStatsResponse = ChartResponse
+    

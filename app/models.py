@@ -48,5 +48,5 @@ class Order(Base):
     item_name = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
     price = Column(Float, nullable=False)
-
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone('UTC')))
     registration = relationship('Registration', back_populates='orders')

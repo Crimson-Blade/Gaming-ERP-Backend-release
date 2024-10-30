@@ -210,87 +210,114 @@ def get_active_inactive_users(db: Session):
         func.date(models.Registration.date) == today
     ).scalar()
 
-    return [
-        {"customer": "active", "visitors": active_users, "fill": "var(--color-active)"},
-        {"customer": "inactive", "visitors": inactive_users, "fill": "var(--color-inactive)"}
-    ]
+    return {
+        "values": [active_users, inactive_users]
+    }
 
 # Function to get income stats from systems and orders for a given period and date range
 def get_income_stats(db: Session, period: str, start_date: date, end_date: date):
-    # Calculate income from systems (services like lounge, consoles, etc.)
     if period == "daily":
+        # Calculate income from systems (services like lounge, consoles, etc.)
         systems_income = db.query(
             func.date(models.System.start_time).label("day"),
-            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+            func.sum(models.System.amount * (func.extract('epoch', models.System.end_time - models.System.start_time) / 3600)).label("income")
         ).filter(
             models.System.start_time >= start_date,
             models.System.start_time <= end_date,
             models.System.end_time.isnot(None)
         ).group_by(func.date(models.System.start_time)).all()
 
-        # Calculate income from orders
+        # Calculate income from orders, using a date or timestamp field
         orders_income = db.query(
-            func.date(models.Order.user_id).label("day"),
+            func.date(models.Order.created_at).label("day"),  # Assuming 'created_at' is the timestamp field
             func.sum(models.Order.price * models.Order.quantity).label("income")
         ).filter(
+            models.Order.created_at >= start_date,
+            models.Order.created_at <= end_date,
             models.Order.user_id.in_(
                 db.query(models.Registration.user_id).filter(
                     models.Registration.date >= start_date,
                     models.Registration.date <= end_date
                 )
             )
-        ).group_by(func.date(models.Order.user_id)).all()
+        ).group_by(func.date(models.Order.created_at)).all()
 
-        return merge_incomes_by_day(systems_income, orders_income)
+        return format_income(merge_incomes_by_day(systems_income, orders_income), "daily")
 
+    # Calculate income from systems (services like lounge, consoles, etc.)
     elif period == "weekly":
         systems_income = db.query(
             func.date_trunc('week', models.System.start_time).label("week"),
-            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+            func.sum(models.System.amount * (func.extract('epoch', models.System.end_time - models.System.start_time) / 3600)).label("income")
         ).filter(
             models.System.start_time >= start_date,
             models.System.start_time <= end_date,
             models.System.end_time.isnot(None)
         ).group_by(func.date_trunc('week', models.System.start_time)).all()
 
+        # Calculate income from orders, using a date or timestamp field
         orders_income = db.query(
-            func.date_trunc('week', models.Order.user_id).label("week"),
+            func.date_trunc('week', models.Order.created_at).label("week"),  # Use 'created_at' or another date field
             func.sum(models.Order.price * models.Order.quantity).label("income")
         ).filter(
+            models.Order.created_at >= start_date,  # Filter based on the date field
+            models.Order.created_at <= end_date,
             models.Order.user_id.in_(
                 db.query(models.Registration.user_id).filter(
                     models.Registration.date >= start_date,
                     models.Registration.date <= end_date
                 )
             )
-        ).group_by(func.date_trunc('week', models.Order.user_id)).all()
+        ).group_by(func.date_trunc('week', models.Order.created_at)).all()  # Group by the correct date field
 
-        return merge_incomes_by_week(systems_income, orders_income)
+        return format_income(merge_incomes_by_week(systems_income, orders_income), "weekly")
 
+    # Calculate income from systems (services like lounge, consoles, etc.)
     elif period == "monthly":
         systems_income = db.query(
             extract('month', models.System.start_time).label("month"),
-            func.sum(models.System.amount * ((models.System.end_time - models.System.start_time).total_seconds() / 3600)).label("income")
+            func.sum(models.System.amount * (func.extract('epoch', models.System.end_time - models.System.start_time) / 3600)).label("income")
         ).filter(
             models.System.start_time >= start_date,
             models.System.start_time <= end_date,
             models.System.end_time.isnot(None)
         ).group_by(extract('month', models.System.start_time)).all()
 
+        # Calculate income from orders using a date or timestamp field
         orders_income = db.query(
-            extract('month', models.Order.user_id).label("month"),
+            extract('month', models.Order.created_at).label("month"),  # Use 'created_at' or another date field
             func.sum(models.Order.price * models.Order.quantity).label("income")
         ).filter(
+            models.Order.created_at >= start_date,  # Use the correct date field for filtering
+            models.Order.created_at <= end_date,
             models.Order.user_id.in_(
                 db.query(models.Registration.user_id).filter(
                     models.Registration.date >= start_date,
                     models.Registration.date <= end_date
                 )
             )
-        ).group_by(extract('month', models.Order.user_id)).all()
+        ).group_by(extract('month', models.Order.created_at)).all()  # Group by the correct date field
 
-        return merge_incomes_by_month(systems_income, orders_income)
+        return format_income(merge_incomes_by_month(systems_income, orders_income), "monthly")
 
+# Function to format the merged income data into the desired structure
+def format_income(merged_income, period):
+    labels = []
+    values = []
+
+    for row in merged_income:
+        if period == "daily":
+            labels.append(row["date"].strftime("%d/%m"))  # Format as 'dd/mm'
+        elif period == "weekly":
+            labels.append(row["week"].strftime("Week %U"))  # Format as 'Week <number>'
+        elif period == "monthly":
+            labels.append(row["month"])  # Month already formatted as 'mmm'
+        values.append(row["income"])
+
+    return {"labels": labels, "values": values}
+
+
+# Functions to merge incomes by day, week, and month remain unchanged, but returning merged dictionary
 def merge_incomes_by_day(systems_income, orders_income):
     merged_income = {}
     for row in systems_income:
@@ -304,6 +331,7 @@ def merge_incomes_by_day(systems_income, orders_income):
 
     return list(merged_income.values())
 
+
 def merge_incomes_by_week(systems_income, orders_income):
     merged_income = {}
     for row in systems_income:
@@ -316,6 +344,7 @@ def merge_incomes_by_week(systems_income, orders_income):
             merged_income[row.week] = {"week": row.week, "income": row.income}
 
     return list(merged_income.values())
+
 
 def merge_incomes_by_month(systems_income, orders_income):
     merged_income = {}
@@ -332,3 +361,68 @@ def merge_incomes_by_month(systems_income, orders_income):
             merged_income[month_name] = {"month": month_name, "income": row.income}
 
     return list(merged_income.values())
+
+from sqlalchemy import func, extract
+from sqlalchemy.orm import Session
+from datetime import date
+
+from sqlalchemy import func, extract
+from sqlalchemy.orm import Session
+from datetime import date
+
+# Function to get average session duration within a date range and period (daily, weekly, monthly) only for 'lounge' systems
+def get_average_session_duration(db: Session, period: str, start_date: date, end_date: date):
+    if period == "daily":
+        data = db.query(
+            func.date(models.System.start_time).label("day"),
+            func.avg(
+                func.extract('epoch', (models.System.end_time - models.System.start_time)) / 60  # Convert seconds to hours
+            ).label("avg_duration")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None),  # Only sessions that have ended
+            models.System.name == "lounge"  # Filter for "lounge" systems
+        ).group_by(func.date(models.System.start_time)).all()
+
+        labels = [str(row.day) for row in data]
+        values = [row.avg_duration for row in data]
+        return {"labels": labels, "values": values}
+
+    elif period == "weekly":
+        data = db.query(
+            func.date_trunc('week', models.System.start_time).label("week"),
+            func.avg(
+                func.extract('epoch', (models.System.end_time - models.System.start_time)) / 60  # Convert seconds to hours
+            ).label("avg_duration")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None),  # Only sessions that have ended
+            models.System.name == "lounge"  # Filter for "lounge" systems
+        ).group_by(func.date_trunc('week', models.System.start_time)).all()
+
+        labels = [str(row.week) for row in data]
+        values = [row.avg_duration for row in data]
+        return {"labels": labels, "values": values}
+
+    elif period == "monthly":
+        data = db.query(
+            extract('month', models.System.start_time).label("month"),
+            func.avg(
+                func.extract('epoch', (models.System.end_time - models.System.start_time)) / 60  # Convert seconds to hours
+            ).label("avg_duration")
+        ).filter(
+            models.System.start_time >= start_date,
+            models.System.start_time <= end_date,
+            models.System.end_time.isnot(None),  # Only sessions that have ended
+            models.System.name == "lounge"  # Filter for "lounge" systems
+        ).group_by(extract('month', models.System.start_time)).all()
+
+        month_names = {1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June", 7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"}
+        labels = [month_names.get(int(row.month), "Unknown") for row in data]
+        values = [row.avg_duration for row in data]
+        
+        return {"labels": labels, "values": values}
+
+    return {"labels": [], "values": []}  # Return empty response if period is invalid
